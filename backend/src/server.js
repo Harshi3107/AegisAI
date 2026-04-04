@@ -61,10 +61,11 @@ app.use(limiter);
 
 // CORS
 const frontendUrls = [
-  process.env.FRONTEND_URL || 'http://localhost:3000',
+  process.env.FRONTEND_URL,
+  'http://localhost:3000',
   'http://localhost:5173',
   'http://127.0.0.1:5173'
-];
+].filter(Boolean); // Remove undefined values
 
 app.use(cors({
   origin: (origin, callback) => {
