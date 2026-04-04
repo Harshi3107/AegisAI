@@ -61,59 +61,27 @@ export const sendOtp = async (req, res, next) => {
       });
     }
 
-    // Generate a 6-digit OTP
+    // Generate OTP
     const otp = String(Math.floor(100000 + Math.random() * 900000));
 
-    // Store OTP with 10-minute expiry
+    // Store OTP
     otpStore.set(normalizedPhone, {
       otp,
-      timestamp: Date.now(),
       expiresAt: Date.now() + 10 * 60 * 1000
     });
 
-    const to = formatPhoneNumber(normalizedPhone);
-
-    const twilioClient = getTwilioClient();
-
-    let deliveryMode = 'sms';
-
-    if (!twilioClient) {
-      console.warn(`Twilio is not configured. OTP for ${normalizedPhone}: ${otp}`);
-      deliveryMode = 'fallback';
-    } else {
-      try {
-        await twilioClient.messages.create({
-          body: `Your Agesis AI verification code is ${otp}. It is valid for 10 minutes.`,
-          from: process.env.TWILIO_SENDER_NUMBER,
-          to
-        });
-        console.log(`✅ OTP sent to ${to}`);
-      } catch (twilioError) {
-        console.warn(`Twilio OTP delivery failed for ${to}: ${twilioError.message}`);
-        deliveryMode = 'fallback';
-      }
-    }
-
-    const canUseFallback = deliveryMode === 'fallback' && shouldExposeOtpFallback();
-
-    if (deliveryMode === 'fallback' && !canUseFallback) {
-      return res.status(500).json({
-        success: false,
-        message: 'OTP delivery failed. Please contact support.'
-      });
-    }
+    // 🔥 ALWAYS fallback (NO TWILIO)
+    console.log(`📲 DEMO OTP for ${normalizedPhone}: ${otp}`);
 
     res.status(200).json({
       success: true,
-      message: deliveryMode === 'sms'
-        ? `OTP sent to ${normalizedPhone}`
-        : `SMS provider unavailable. OTP fallback is enabled for local testing on ${normalizedPhone}`,
+      message: `OTP generated (demo mode)`,
       data: {
         phone: normalizedPhone,
-        deliveryMode,
-        ...(canUseFallback && { otp })
+        otp   // 👈 IMPORTANT: send OTP to frontend
       }
     });
+
   } catch (error) {
     next(error);
   }
