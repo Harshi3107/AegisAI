@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle2, AlertTriangle, AlertCircle, Triangle, WalletCards } from 'lucide-react';
-import { getEnvironmentalLogs, getClaims, getJobStatus, simulateEvent, createOrder, verifyPayment, getProfile, predictClaim } from '../../services/api';
+import { getEnvironmentalLogs, getClaims, getJobStatus, simulateEvent, createOrder, verifyPayment, getProfile } from '../../services/api';
+import { simulateRain as aiSimulateRain, simulateHeatwave as aiSimulateHeatwave, simulateAQI as aiSimulateAQI, simulateFlood as aiSimulateFlood, getTriggerName } from '../../services/aiClaimService';
 
 const PLAN_METRICS = {
   Low: {
@@ -243,94 +244,57 @@ export default function DashboardView({ onBack, onLogout, selectedPlan, selected
 
   // New simulation functions for AI backend
   const simulateRain = async () => {
-    setStatusMessage('Simulating rain event...');
+    setStatusMessage('🌧️ Evaluating claim...');
     setClaimResult(null);
     try {
-      const payload = {
-        user_id: "u1",
-        user_plan: "premium",
-        user_zone: "low_risk",
-        user_registered_latitude: 17.3850,
-        user_registered_longitude: 78.4867,
-        claim_latitude: 17.3850,
-        claim_longitude: 78.4867,
-        claim_timestamp: new Date().toISOString(),
-        rainfall_mm_hr: 80,
-        temperature_celsius: 30,
-        aqi: 100,
-        claims_this_week: 1
-      };
-      const response = await predictClaim(payload);
-      setClaimResult({
-        ...response.data,
-        message: "Claim auto-triggered due to rain"
-      });
-      setStatusMessage('Rain simulation completed successfully!');
+      const response = await aiSimulateRain();
+      setClaimResult(response.data);
+      setStatusMessage('Claim evaluation complete');
     } catch (error) {
       console.error('Rain simulation failed', error);
-      setStatusMessage(`Rain simulation failed: ${error.message}`);
+      setStatusMessage(`Error: ${error.message}`);
       setClaimResult({ error: error.message });
     }
   };
 
   const simulateHeatwave = async () => {
-    setStatusMessage('Simulating heatwave event...');
+    setStatusMessage('🔥 Evaluating claim...');
     setClaimResult(null);
     try {
-      const payload = {
-        user_id: "u1",
-        user_plan: "premium",
-        user_zone: "low_risk",
-        user_registered_latitude: 17.3850,
-        user_registered_longitude: 78.4867,
-        claim_latitude: 17.3850,
-        claim_longitude: 78.4867,
-        claim_timestamp: new Date().toISOString(),
-        rainfall_mm_hr: 0,
-        temperature_celsius: 45,
-        aqi: 120,
-        claims_this_week: 1
-      };
-      const response = await predictClaim(payload);
-      setClaimResult({
-        ...response.data,
-        message: "Claim auto-triggered due to heatwave"
-      });
-      setStatusMessage('Heatwave simulation completed successfully!');
+      const response = await aiSimulateHeatwave();
+      setClaimResult(response.data);
+      setStatusMessage('Claim evaluation complete');
     } catch (error) {
       console.error('Heatwave simulation failed', error);
-      setStatusMessage(`Heatwave simulation failed: ${error.message}`);
+      setStatusMessage(`Error: ${error.message}`);
       setClaimResult({ error: error.message });
     }
   };
 
   const simulateAQI = async () => {
-    setStatusMessage('Simulating high AQI event...');
+    setStatusMessage('💨 Evaluating claim...');
     setClaimResult(null);
     try {
-      const payload = {
-        user_id: "u1",
-        user_plan: "premium",
-        user_zone: "low_risk",
-        user_registered_latitude: 17.3850,
-        user_registered_longitude: 78.4867,
-        claim_latitude: 17.3850,
-        claim_longitude: 78.4867,
-        claim_timestamp: new Date().toISOString(),
-        rainfall_mm_hr: 0,
-        temperature_celsius: 30,
-        aqi: 300,
-        claims_this_week: 1
-      };
-      const response = await predictClaim(payload);
-      setClaimResult({
-        ...response.data,
-        message: "Claim auto-triggered due to high AQI"
-      });
-      setStatusMessage('AQI simulation completed successfully!');
+      const response = await aiSimulateAQI();
+      setClaimResult(response.data);
+      setStatusMessage('Claim evaluation complete');
     } catch (error) {
       console.error('AQI simulation failed', error);
-      setStatusMessage(`AQI simulation failed: ${error.message}`);
+      setStatusMessage(`Error: ${error.message}`);
+      setClaimResult({ error: error.message });
+    }
+  };
+
+  const simulateFlood = async () => {
+    setStatusMessage('🌊 Evaluating claim...');
+    setClaimResult(null);
+    try {
+      const response = await aiSimulateFlood();
+      setClaimResult(response.data);
+      setStatusMessage('Claim evaluation complete');
+    } catch (error) {
+      console.error('Flood simulation failed', error);
+      setStatusMessage(`Error: ${error.message}`);
       setClaimResult({ error: error.message });
     }
   };
@@ -472,36 +436,63 @@ export default function DashboardView({ onBack, onLogout, selectedPlan, selected
                   <button
                     onClick={simulateRain}
                     className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
-                    Simulate Rain
+                    🌧️ Simulate Rain
                   </button>
                   <button
                     onClick={simulateHeatwave}
                     className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
-                    Simulate Heatwave
+                    🔥 Simulate Heatwave
                   </button>
                   <button
                     onClick={simulateAQI}
                     className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
-                    Simulate High AQI
+                    💨 Simulate AQI
+                  </button>
+                  <button
+                    onClick={simulateFlood}
+                    className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
+                    🌊 Simulate Flood
                   </button>
                 </div>
                 <p className="mt-3 text-sm text-slate-500">{statusMessage || 'Click a simulation button to test the AI claim evaluation.'}</p>
                 {claimResult && !claimResult.error && (
                   <div className={`mt-4 rounded-xl border p-4 ${claimResult.status === 'APPROVED' ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
-                    <div className="flex items-center gap-2 mb-2">
-                      {claimResult.status === 'APPROVED' ? (
-                        <CheckCircle2 size={20} className="text-green-600" />
-                      ) : (
-                        <AlertTriangle size={20} className="text-red-600" />
+                    <h3 className="text-lg font-bold mb-3">🚀 Claim Evaluation Result</h3>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Status:</span>
+                        <span className={`font-bold ${claimResult.status === 'APPROVED' ? 'text-green-700' : 'text-red-700'}`}>
+                          {claimResult.status === 'APPROVED' ? '✅ APPROVED' : '❌ REJECTED'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Risk Score:</span>
+                        <span className="font-semibold text-slate-900">{claimResult.risk_score?.toFixed(3)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Zone:</span>
+                        <span className="font-semibold text-slate-900">{claimResult.zone}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Fraud Score:</span>
+                        <span className="font-semibold text-slate-900">{claimResult.fraud_score?.toFixed(3)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Trigger Type:</span>
+                        <span className="font-semibold text-slate-900">{getTriggerName(claimResult.trigger_type)}</span>
+                      </div>
+                      {claimResult.status === 'APPROVED' && (
+                        <div className="mt-3 pt-3 border-t border-green-200">
+                          <p className="text-green-700 font-bold">✔️ Payout Eligible</p>
+                          <p className="text-xs text-green-600 mt-1">Your claim has been automatically approved based on parametric triggers.</p>
+                        </div>
                       )}
-                      <span className={`font-bold ${claimResult.status === 'APPROVED' ? 'text-green-800' : 'text-red-800'}`}>
-                        {claimResult.status}
-                      </span>
-                    </div>
-                    <p className="text-sm text-slate-700 mb-2">{claimResult.message}</p>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <div>Risk Score: <span className="font-semibold">{claimResult.risk_score?.toFixed(2)}</span></div>
-                      <div>Zone: <span className="font-semibold">{claimResult.zone}</span></div>
+                      {claimResult.status === 'REJECTED' && (
+                        <div className="mt-3 pt-3 border-t border-red-200">
+                          <p className="text-red-700 font-bold">❌ No Payout</p>
+                          <p className="text-xs text-red-600 mt-1">No valid trigger detected for this environmental event.</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Users, ClipboardList, DollarSign, ShieldCheck, AlertTriangle, AlertCircle, Triangle, MapPin } from 'lucide-react';
 import { getEnvironmentalLogs, getClaims, getJobStatus, simulateEvent } from '../../services/api';
+import { simulateRain as aiSimulateRain, simulateHeatwave as aiSimulateHeatwave, simulateAQI as aiSimulateAQI, simulateFlood as aiSimulateFlood, getTriggerName } from '../../services/aiClaimService';
 
 const DEMO_LOCATIONS = [
   { id: 'guntur', name: 'Guntur, Andhra Pradesh', lat: 16.5833, lng: 80.4667, region: 'AP', baseMultiplier: 1.0 },
@@ -21,6 +22,7 @@ export default function AdminDashboard({ onBack, demoMode, setDemoMode }) {
   const [demoClaims, setDemoClaims] = useState([]);
   const [chartRange, setChartRange] = useState('week');
   const [hoveredIndex, setHoveredIndex] = useState(null);
+  const [claimResult, setClaimResult] = useState(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -49,34 +51,57 @@ export default function AdminDashboard({ onBack, demoMode, setDemoMode }) {
   }, []);
 
   const simulate = async (type) => {
-    setStatusMessage('Simulating event...');
+    setStatusMessage('Evaluating claim...');
+    setClaimResult(null);
     try {
-      await simulateEvent(type, selectedLocation.lat, selectedLocation.lng);
+      let response;
+      let triggerType = 'NONE';
       
-      // Calculate payout based on location and event type
-      const basePayout = type === 'highRain' ? 300 : type === 'highAQI' ? 250 : 200;
-      const regionPayout = Math.round(basePayout * selectedLocation.baseMultiplier);
+      if (type === 'highRain') {
+        response = await aiSimulateRain();
+        triggerType = 'RAIN';
+      } else if (type === 'highAQI') {
+        response = await aiSimulateAQI();
+        triggerType = 'AQI';
+      } else if (type === 'heatSpike') {
+        response = await aiSimulateHeatwave();
+        triggerType = 'HEATWAVE';
+      } else if (type === 'flood') {
+        response = await aiSimulateFlood();
+        triggerType = 'FLOOD';
+      }
       
-      // Add demo claim
-      setDemoClaims((prev) => [
-        {
-          _id: `demo-${Date.now()}`,
-          trigger_type: type === 'highRain' ? 'rain' : type === 'highAQI' ? 'aqi' : 'heat',
-          location: selectedLocation.name,
-          region: selectedLocation.region,
-          payout: regionPayout,
-          status: 'PAID',
-          createdAt: new Date().toISOString()
-        },
-        ...prev
-      ]);
+      const data = response.data;
+      setClaimResult(data);
       
-      await new Promise((resolve) => setTimeout(resolve, 2200));
+      // Add to claims if approved
+      if (data.status === 'APPROVED') {
+        const basePayout = type === 'highRain' ? 300 : type === 'highAQI' ? 250 : type === 'heatSpike' ? 200 : 400;
+        const regionPayout = Math.round(basePayout * selectedLocation.baseMultiplier);
+        
+        setDemoClaims((prev) => [
+          {
+            _id: `demo-${Date.now()}`,
+            trigger_type: triggerType.toLowerCase(),
+            location: selectedLocation.name,
+            region: selectedLocation.region,
+            payout: regionPayout,
+            fraud_score: data.fraud_score,
+            risk_score: data.risk_score,
+            status: 'PAID',
+            createdAt: new Date().toISOString()
+          },
+          ...prev
+        ]);
+      }
+      
+      setStatusMessage(`Claim evaluated. Status: ${data.status} | Trigger: ${getTriggerName(data.trigger_type)}`);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
       await fetchData();
-      setStatusMessage(`Simulation ${type} completed. Region: ${selectedLocation.region} • Payout: ₹${regionPayout}`);
     } catch (error) {
       console.error('Simulation failed', error);
       setStatusMessage(`Simulation failed: ${error.message}`);
+      setClaimResult({ error: error.message });
     }
   };
 
@@ -358,23 +383,78 @@ export default function AdminDashboard({ onBack, demoMode, setDemoMode }) {
           </div>
 
           <div className="flex flex-wrap gap-2 mb-4">
-            {['highRain', 'highAQI', 'heatSpike'].map((eventType) => {
-              const basePayout = eventType === 'highRain' ? 300 : eventType === 'highAQI' ? 250 : 200;
-              const regionPayout = Math.round(basePayout * selectedLocation.baseMultiplier);
-              return (
-                <button
-                  key={eventType}
-                  onClick={() => simulate(eventType)}
-                  disabled={!demoMode}
-                  className={`rounded-xl px-4 py-2 font-medium transition ${demoMode ? 'bg-cyan-600 text-white hover:bg-cyan-500' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}>
-                  Simulate {eventType === 'highRain' ? 'High Rain' : eventType === 'highAQI' ? 'High AQI' : 'Heat Spike'} • <strong>₹{regionPayout}</strong>
-                </button>
-              );
-            })}
+            <button
+              onClick={() => simulate('highRain')}
+              disabled={!demoMode}
+              className={`rounded-xl px-4 py-2 font-medium transition ${demoMode ? 'bg-cyan-600 text-white hover:bg-cyan-500' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}>
+              🌧️ Simulate Rain
+            </button>
+            <button
+              onClick={() => simulate('highAQI')}
+              disabled={!demoMode}
+              className={`rounded-xl px-4 py-2 font-medium transition ${demoMode ? 'bg-cyan-600 text-white hover:bg-cyan-500' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}>
+              💨 Simulate AQI
+            </button>
+            <button
+              onClick={() => simulate('heatSpike')}
+              disabled={!demoMode}
+              className={`rounded-xl px-4 py-2 font-medium transition ${demoMode ? 'bg-cyan-600 text-white hover:bg-cyan-500' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}>
+              🔥 Simulate Heatwave
+            </button>
+            <button
+              onClick={() => simulate('flood')}
+              disabled={!demoMode}
+              className={`rounded-xl px-4 py-2 font-medium transition ${demoMode ? 'bg-cyan-600 text-white hover:bg-cyan-500' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}>
+              🌊 Simulate Flood
+            </button>
           </div>
 
-          <p className="text-sm text-slate-600">{statusMessage || 'Enable demo mode to run simulations. Payouts vary by region.'}</p>
-          <p className="mt-2 text-xs text-slate-500">Selected Region: <strong>{selectedLocation.name}</strong> • After simulation, system refreshes metrics automatically.</p>
+          <p className="text-sm text-slate-600">{statusMessage || 'Enable demo mode to run simulations.'}</p>
+          
+          {claimResult && !claimResult.error && (
+            <div className={`mt-4 rounded-xl border p-4 ${claimResult.status === 'APPROVED' ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+                <div>
+                  <p className="text-slate-600 text-xs">Status</p>
+                  <p className={`font-bold text-base ${claimResult.status === 'APPROVED' ? 'text-green-700' : 'text-red-700'}`}>
+                    {claimResult.status === 'APPROVED' ? '✅ APPROVED' : '❌ REJECTED'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-600 text-xs">Trigger</p>
+                  <p className="font-bold text-slate-900">{getTriggerName(claimResult.trigger_type)}</p>
+                </div>
+                <div>
+                  <p className="text-slate-600 text-xs">Risk Score</p>
+                  <p className="font-bold text-slate-900">{claimResult.risk_score?.toFixed(3)}</p>
+                </div>
+                <div>
+                  <p className="text-slate-600 text-xs">Fraud Score</p>
+                  <p className={`font-bold ${claimResult.fraud_score > 0.5 ? 'text-red-700' : 'text-slate-900'}`}>
+                    {claimResult.fraud_score?.toFixed(3)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-600 text-xs">Zone</p>
+                  <p className="font-bold text-slate-900">{claimResult.zone}</p>
+                </div>
+              </div>
+              {claimResult.fraud_score > 0.5 && (
+                <div className="mt-3 pt-3 border-t border-red-200 flex items-center gap-2">
+                  <AlertTriangle size={18} className="text-red-600" />
+                  <p className="text-sm font-bold text-red-700">🚨 Suspicious Activity Detected</p>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {claimResult?.error && (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
+              <p className="text-sm text-red-700"><strong>Error:</strong> {claimResult.error}</p>
+            </div>
+          )}
+          
+          <p className="mt-3 text-xs text-slate-500">Selected Region: <strong>{selectedLocation.name}</strong> ({selectedLocation.region}) • Payout Multiplier: <strong>{selectedLocation.baseMultiplier}x</strong></p>
         </div>
 
         <p className="text-xs text-slate-500">Job status next run: {jobStatus?.nextRun ? new Date(jobStatus.nextRun).toLocaleString() : 'N/A'}</p>
