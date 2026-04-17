@@ -89,3 +89,21 @@ export const updateUserLocation = (lat, lng) => request('/api/user/location', {
   method: 'POST',
   body: JSON.stringify({ lat, lng })
 });
+
+// New function for AI backend prediction
+export const predictClaim = (payload) => {
+  const AI_API_BASE = 'https://aegisai-1.onrender.com';
+  return fetch(`${AI_API_BASE}/predict-claim`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  }).then(async (response) => {
+    const data = await safeJson(response);
+    if (!response.ok) {
+      throw new Error(data.error || `API request failed with status ${response.status}`);
+    }
+    return data;
+  });
+};

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle2, AlertTriangle, AlertCircle, Triangle, WalletCards } from 'lucide-react';
-import { getEnvironmentalLogs, getClaims, getJobStatus, simulateEvent, createOrder, verifyPayment, getProfile } from '../../services/api';
+import { getEnvironmentalLogs, getClaims, getJobStatus, simulateEvent, createOrder, verifyPayment, getProfile, predictClaim } from '../../services/api';
 
 const PLAN_METRICS = {
   Low: {
@@ -56,6 +56,7 @@ export default function DashboardView({ onBack, onLogout, selectedPlan, selected
   const [demoClaims, setDemoClaims] = useState([]);
   const [selectedSimulation, setSelectedSimulation] = useState(null);
   const [selectedDemoPlan, setSelectedDemoPlan] = useState({ region: null, plan: null });
+  const [claimResult, setClaimResult] = useState(null);
 
   // Use selectedDemoPlan for demo mode, fall back to profile plan for live mode
   const planKey = selectedDemoPlan.plan || selectedPlan || userProfile?.plan;
@@ -240,6 +241,100 @@ export default function DashboardView({ onBack, onLogout, selectedPlan, selected
     }
   };
 
+  // New simulation functions for AI backend
+  const simulateRain = async () => {
+    setStatusMessage('Simulating rain event...');
+    setClaimResult(null);
+    try {
+      const payload = {
+        user_id: "u1",
+        user_plan: "premium",
+        user_zone: "low_risk",
+        user_registered_latitude: 17.3850,
+        user_registered_longitude: 78.4867,
+        claim_latitude: 17.3850,
+        claim_longitude: 78.4867,
+        claim_timestamp: new Date().toISOString(),
+        rainfall_mm_hr: 80,
+        temperature_celsius: 30,
+        aqi: 100,
+        claims_this_week: 1
+      };
+      const response = await predictClaim(payload);
+      setClaimResult({
+        ...response.data,
+        message: "Claim auto-triggered due to rain"
+      });
+      setStatusMessage('Rain simulation completed successfully!');
+    } catch (error) {
+      console.error('Rain simulation failed', error);
+      setStatusMessage(`Rain simulation failed: ${error.message}`);
+      setClaimResult({ error: error.message });
+    }
+  };
+
+  const simulateHeatwave = async () => {
+    setStatusMessage('Simulating heatwave event...');
+    setClaimResult(null);
+    try {
+      const payload = {
+        user_id: "u1",
+        user_plan: "premium",
+        user_zone: "low_risk",
+        user_registered_latitude: 17.3850,
+        user_registered_longitude: 78.4867,
+        claim_latitude: 17.3850,
+        claim_longitude: 78.4867,
+        claim_timestamp: new Date().toISOString(),
+        rainfall_mm_hr: 0,
+        temperature_celsius: 45,
+        aqi: 120,
+        claims_this_week: 1
+      };
+      const response = await predictClaim(payload);
+      setClaimResult({
+        ...response.data,
+        message: "Claim auto-triggered due to heatwave"
+      });
+      setStatusMessage('Heatwave simulation completed successfully!');
+    } catch (error) {
+      console.error('Heatwave simulation failed', error);
+      setStatusMessage(`Heatwave simulation failed: ${error.message}`);
+      setClaimResult({ error: error.message });
+    }
+  };
+
+  const simulateAQI = async () => {
+    setStatusMessage('Simulating high AQI event...');
+    setClaimResult(null);
+    try {
+      const payload = {
+        user_id: "u1",
+        user_plan: "premium",
+        user_zone: "low_risk",
+        user_registered_latitude: 17.3850,
+        user_registered_longitude: 78.4867,
+        claim_latitude: 17.3850,
+        claim_longitude: 78.4867,
+        claim_timestamp: new Date().toISOString(),
+        rainfall_mm_hr: 0,
+        temperature_celsius: 30,
+        aqi: 300,
+        claims_this_week: 1
+      };
+      const response = await predictClaim(payload);
+      setClaimResult({
+        ...response.data,
+        message: "Claim auto-triggered due to high AQI"
+      });
+      setStatusMessage('AQI simulation completed successfully!');
+    } catch (error) {
+      console.error('AQI simulation failed', error);
+      setStatusMessage(`AQI simulation failed: ${error.message}`);
+      setClaimResult({ error: error.message });
+    }
+  };
+
   const explainClaim = (claim) => {
     const triggerMap = {
       rain: 'Rainfall',
@@ -374,22 +469,49 @@ export default function DashboardView({ onBack, onLogout, selectedPlan, selected
             ) : (
               <div>
                 <div className="flex flex-wrap gap-2 mb-4">
-                  {['highRain', 'highAQI', 'heatSpike'].map((eventType) => (
-                    <button
-                      key={eventType}
-                      onClick={() => simulate(eventType)}
-                      disabled={!demoMode || !selectedDemoPlan.plan}
-                      className={`rounded-xl px-4 py-2 font-medium transition ${demoMode && selectedDemoPlan.plan ? 'bg-cyan-600 text-white hover:bg-cyan-500' : 'bg-slate-100 text-slate-500 cursor-not-allowed'}`}>
-                      Simulate {eventType === 'highRain' ? 'High Rain' : eventType === 'highAQI' ? 'High AQI' : 'Heat Spike'}
-                    </button>
-                  ))}
+                  <button
+                    onClick={simulateRain}
+                    className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
+                    Simulate Rain
+                  </button>
+                  <button
+                    onClick={simulateHeatwave}
+                    className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
+                    Simulate Heatwave
+                  </button>
+                  <button
+                    onClick={simulateAQI}
+                    className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
+                    Simulate High AQI
+                  </button>
                 </div>
-                <p className="mt-3 text-sm text-slate-500">{statusMessage || 'Enable Demo Mode to run event simulations.'}</p>
-                {lastClaimMessage && <p className="mt-1 text-sm font-semibold text-emerald-700">{lastClaimMessage}</p>}
-                {selectedSimulation && (
-                  <div className="mt-3 rounded-xl border border-cyan-200 bg-cyan-50 p-3 text-sm">
-                    <p className="text-cyan-900 font-semibold">For this simulation ({simulationReadableName}), claim amount will be: ₹{selectedSimulationPayout}</p>
-                    <p className="text-cyan-700 text-xs mt-1">Selected plan: {planName} ({risk} region)</p>
+                <p className="mt-3 text-sm text-slate-500">{statusMessage || 'Click a simulation button to test the AI claim evaluation.'}</p>
+                {claimResult && !claimResult.error && (
+                  <div className={`mt-4 rounded-xl border p-4 ${claimResult.status === 'APPROVED' ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      {claimResult.status === 'APPROVED' ? (
+                        <CheckCircle2 size={20} className="text-green-600" />
+                      ) : (
+                        <AlertTriangle size={20} className="text-red-600" />
+                      )}
+                      <span className={`font-bold ${claimResult.status === 'APPROVED' ? 'text-green-800' : 'text-red-800'}`}>
+                        {claimResult.status}
+                      </span>
+                    </div>
+                    <p className="text-sm text-slate-700 mb-2">{claimResult.message}</p>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div>Risk Score: <span className="font-semibold">{claimResult.risk_score?.toFixed(2)}</span></div>
+                      <div>Zone: <span className="font-semibold">{claimResult.zone}</span></div>
+                    </div>
+                  </div>
+                )}
+                {claimResult?.error && (
+                  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <AlertCircle size={20} className="text-red-600" />
+                      <span className="font-bold text-red-800">Error</span>
+                    </div>
+                    <p className="text-sm text-red-700">{claimResult.error}</p>
                   </div>
                 )}
               </div>
