@@ -1,0 +1,14 @@
+# Python / ML
+ml-backend/venv/
+ml-backend/__pycache__/
+ml-backend/**/*.pyc
+
+# Model files
+ml-backend/models/*.pkl
+
+# Env files
+.env
+
+# OS + misc
+.DS_Store
+Thumbs.db
