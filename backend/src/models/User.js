@@ -20,7 +20,6 @@ const userSchema = new mongoose.Schema({
   email: {
     type: String,
     required: [true, 'Email is required'],
-    unique: true,
     lowercase: true,
     validate: {
       validator: function(email) {
@@ -42,6 +41,31 @@ const userSchema = new mongoose.Schema({
   company: {
     type: String,
     trim: true
+  },
+  aadhaar: {
+    type: String,
+    trim: true,
+    unique: true,
+    sparse: true,
+    validate: {
+      validator: function(aadhaar) {
+        return /^\d{12}$/.test(aadhaar);
+      },
+      message: 'Aadhaar must be a valid 12-digit number'
+    }
+  },
+  pan: {
+    type: String,
+    trim: true,
+    uppercase: true,
+    unique: true,
+    sparse: true,
+    validate: {
+      validator: function(pan) {
+        return /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan);
+      },
+      message: 'PAN must be in format ABCDE1234F'
+    }
   },
   plan: {
     type: String,

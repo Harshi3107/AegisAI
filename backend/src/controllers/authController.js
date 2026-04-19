@@ -45,6 +45,42 @@ const formatPhoneNumber = (phone) => {
   return `+${digitsOnly}`;
 };
 
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+const normalizeUsername = (value) => String(value || '').trim().toLowerCase();
+const normalizeAadhaar = (value) => String(value || '').replace(/\D/g, '');
+const normalizePan = (value) => String(value || '').trim().toUpperCase();
+
+// @desc    Check duplicate user fields
+// @route   POST /api/auth/check-duplicates
+// @access  Public
+export const checkDuplicates = async (req, res, next) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const username = normalizeUsername(req.body?.username);
+    const aadhaar = normalizeAadhaar(req.body?.aadhaar);
+    const pan = normalizePan(req.body?.pan);
+
+    const [emailUser, usernameUser, aadhaarUser, panUser] = await Promise.all([
+      email ? User.findOne({ email }).select('_id') : Promise.resolve(null),
+      username ? User.findOne({ username }).select('_id') : Promise.resolve(null),
+      aadhaar ? User.findOne({ aadhaar }).select('_id') : Promise.resolve(null),
+      pan ? User.findOne({ pan }).select('_id') : Promise.resolve(null)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        emailExists: Boolean(emailUser),
+        usernameExists: Boolean(usernameUser),
+        aadhaarExists: Boolean(aadhaarUser),
+        panExists: Boolean(panUser)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // @desc    Send OTP to phone number
 // @route   POST /api/auth/send-otp
 // @access  Public
@@ -156,6 +192,8 @@ export const register = async (req, res, next) => {
       username,
       phone,
       company,
+      aadhaar,
+      pan,
       plan,
       risk,
       city,
@@ -171,13 +209,30 @@ export const register = async (req, res, next) => {
       });
     }
 
-    // Check if user exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'User already exists'
-      });
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedAadhaar = String(aadhaar || '').replace(/\D/g, '');
+    const normalizedPan = String(pan || '').trim().toUpperCase();
+
+    // Check if Aadhaar exists
+    if (normalizedAadhaar) {
+      const existingAadhaar = await User.findOne({ aadhaar: normalizedAadhaar });
+      if (existingAadhaar) {
+        return res.status(400).json({
+          success: false,
+          message: 'Aadhaar already exists'
+        });
+      }
+    }
+
+    // Check if PAN exists
+    if (normalizedPan) {
+      const existingPan = await User.findOne({ pan: normalizedPan });
+      if (existingPan) {
+        return res.status(400).json({
+          success: false,
+          message: 'PAN already exists'
+        });
+      }
     }
 
     // Create user
@@ -195,10 +250,12 @@ export const register = async (req, res, next) => {
     const user = await User.create({
       username: normalizedUsername || undefined,
       name: name || `${firstName || ''} ${lastName || ''}`.trim(),
-      email,
+      email: normalizedEmail,
       password,
       phone,
       company,
+      aadhaar: normalizedAadhaar || undefined,
+      pan: normalizedPan || undefined,
       plan: plan || 'standard',
       risk: risk || 'Low',
       policyId: policyId || generatePolicyId(),

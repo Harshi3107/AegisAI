@@ -85,6 +85,11 @@ export const loginUser = (payload) => request('/api/auth/login', {
   body: JSON.stringify(payload)
 });
 
+export const checkDuplicateFields = (payload) => request('/api/auth/check-duplicates', {
+  method: 'POST',
+  body: JSON.stringify(payload)
+});
+
 export const updateUserLocation = (lat, lng) => request('/api/user/location', {
   method: 'POST',
   body: JSON.stringify({ lat, lng })

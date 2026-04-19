@@ -12,7 +12,7 @@ import {
   MapPin
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { getLocationRiskProfile, sendOtp, verifyOtp } from '../../services/api';
+import { getLocationRiskProfile, sendOtp, verifyOtp, checkDuplicateFields } from '../../services/api';
 
 export default function OnboardingView({ onComplete }) {
   const [step, setStep] = useState(1);
@@ -30,6 +30,19 @@ export default function OnboardingView({ onComplete }) {
   const [locationRisk, setLocationRisk] = useState('Low');
   const [locationRiskSummary, setLocationRiskSummary] = useState('Auto-detected from historical weather patterns');
   const [locationName, setLocationName] = useState('Detecting...');
+  const [localKycDuplicate, setLocalKycDuplicate] = useState({ aadhaar: false, pan: false });
+  const [localProfileDuplicate, setLocalProfileDuplicate] = useState({ email: false, username: false });
+  const [remoteDuplicate, setRemoteDuplicate] = useState({ email: false, username: false, aadhaar: false, pan: false });
+
+  const profileDuplicate = {
+    email: localProfileDuplicate.email || remoteDuplicate.email,
+    username: localProfileDuplicate.username || remoteDuplicate.username
+  };
+
+  const kycDuplicate = {
+    aadhaar: localKycDuplicate.aadhaar || remoteDuplicate.aadhaar,
+    pan: localKycDuplicate.pan || remoteDuplicate.pan
+  };
 
   const localOtpFallbackEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_LOCAL_OTP_FALLBACK === 'true';
   const localOtpKey = (phone) => `aegis_local_otp_${String(phone || '').replace(/\D/g, '')}`;
@@ -62,21 +75,22 @@ export default function OnboardingView({ onComplete }) {
       formData.lastName.trim().length > 0 &&
       /\S+@\S+\.\S+/.test(formData.email) &&
       formData.phone.length === 10 &&
-      companyValid
+      companyValid &&
+      !profileDuplicate.email
     );
   };
 
   const isStep2Valid = () => {
     const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
     const baseValid = formData.aadhaar.length === 12 && panRegex.test(formData.pan.toUpperCase());
-    return baseValid && otpSent && otpVerified;
+    return baseValid && otpSent && otpVerified && !kycDuplicate.aadhaar && !kycDuplicate.pan;
   };
 
   const isStep3Valid = () => {
     const usernameValid = formData.username.trim().length >= 4;
     const passwordValid = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/.test(formData.password);
     const confirmValid = formData.password === formData.confirmPassword;
-    return usernameValid && passwordValid && confirmValid;
+    return usernameValid && passwordValid && confirmValid && !profileDuplicate.username;
   };
 
   const isStep4Valid = () => formData.city.trim().length > 0;
@@ -84,6 +98,69 @@ export default function OnboardingView({ onComplete }) {
   const isStep6Valid = () => {
     const upiRegex = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
     return upiRegex.test(formData.upi.trim());
+  };
+
+  const hasAnyDuplicate = () => (
+    profileDuplicate.email ||
+    profileDuplicate.username ||
+    kycDuplicate.aadhaar ||
+    kycDuplicate.pan
+  );
+
+  const normalizeDuplicatePayload = (payload = {}) => ({
+    email: String(payload.email || '').trim(),
+    username: String(payload.username || '').trim(),
+    aadhaar: String(payload.aadhaar || '').replace(/\D/g, ''),
+    pan: String(payload.pan || '').trim().toUpperCase()
+  });
+
+  const refreshDuplicateState = async (payload = {}) => {
+    const normalizedPayload = normalizeDuplicatePayload(payload);
+
+    try {
+      const response = await checkDuplicateFields(normalizedPayload);
+      const data = response?.data || {};
+      setRemoteDuplicate({
+        email: Boolean(data.emailExists),
+        username: Boolean(data.usernameExists),
+        aadhaar: Boolean(data.aadhaarExists),
+        pan: Boolean(data.panExists)
+      });
+      return data;
+    } catch (error) {
+      return { error: true };
+    }
+  };
+
+  const handleDuplicateBlur = async () => {
+    await refreshDuplicateState({
+      email: formData.email,
+      username: formData.username,
+      aadhaar: formData.aadhaar,
+      pan: formData.pan
+    });
+  };
+
+  const handleStepAdvance = async (nextAction, payload = {}) => {
+    const result = await refreshDuplicateState(payload);
+    if (!result || result.error) {
+      setOtpStatus('Unable to verify the entered details right now. Please wait and try again.');
+      return;
+    }
+
+    const emailExists = Boolean(result?.emailExists);
+    const usernameExists = Boolean(result?.usernameExists);
+    const aadhaarExists = Boolean(result?.aadhaarExists);
+    const panExists = Boolean(result?.panExists);
+
+    if (emailExists || usernameExists || aadhaarExists || panExists) {
+      if (emailExists) setStep(1);
+      else if (aadhaarExists || panExists) setStep(2);
+      else if (usernameExists) setStep(3);
+      return;
+    }
+
+    nextAction();
   };
 
   const getPlans = (riskLevel) => {
@@ -100,6 +177,85 @@ export default function OnboardingView({ onComplete }) {
       { id: 'premium', name: 'Premium', weekly: '150', perRide: '1.00', maxEvent: '1000', maxWeekly: '2000', payouts: { rain: 400, heat: 300, aqi: 300, flood: 1000 } }
     ];
   };
+
+  useEffect(() => {
+    const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+    const normalizeUsername = (value) => String(value || '').trim().toLowerCase();
+    const normalizeAadhaar = (value) => String(value || '').replace(/\D/g, '');
+    const normalizePan = (value) => String(value || '').trim().toUpperCase();
+
+    let users = [];
+    try {
+      const raw = localStorage.getItem('aegis_local_users');
+      const parsed = raw ? JSON.parse(raw) : [];
+      users = Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      users = [];
+    }
+
+    const email = normalizeEmail(formData.email);
+    const username = normalizeUsername(formData.username);
+    const aadhaar = normalizeAadhaar(formData.aadhaar);
+    const pan = normalizePan(formData.pan);
+
+    const emailExists = email.length > 0 && users.some((u) => normalizeEmail(u?.email) === email);
+    const usernameExists = username.length > 0 && users.some((u) => normalizeUsername(u?.username) === username);
+
+    const aadhaarExists = aadhaar.length === 12 && users.some((u) => normalizeAadhaar(u?.aadhaar) === aadhaar);
+    const panExists = pan.length === 10 && users.some((u) => normalizePan(u?.pan) === pan);
+
+    setLocalProfileDuplicate({ email: emailExists, username: usernameExists });
+    setLocalKycDuplicate({ aadhaar: aadhaarExists, pan: panExists });
+  }, [formData.email, formData.username, formData.aadhaar, formData.pan]);
+
+  useEffect(() => {
+    let isActive = true;
+    const timer = setTimeout(async () => {
+      const email = String(formData.email || '').trim();
+      const username = String(formData.username || '').trim();
+      const aadhaar = String(formData.aadhaar || '').replace(/\D/g, '');
+      const pan = String(formData.pan || '').trim().toUpperCase();
+
+      const shouldCheckEmail = /\S+@\S+\.\S+/.test(email);
+      const shouldCheckUsername = username.length >= 4;
+      const shouldCheckAadhaar = aadhaar.length === 12;
+      const shouldCheckPan = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan);
+
+      if (!shouldCheckEmail && !shouldCheckUsername && !shouldCheckAadhaar && !shouldCheckPan) {
+        if (isActive) {
+          setRemoteDuplicate({ email: false, username: false, aadhaar: false, pan: false });
+        }
+        return;
+      }
+
+      try {
+        const response = await checkDuplicateFields({
+          email: shouldCheckEmail ? email : '',
+          username: shouldCheckUsername ? username : '',
+          aadhaar: shouldCheckAadhaar ? aadhaar : '',
+          pan: shouldCheckPan ? pan : ''
+        });
+
+        if (!isActive) return;
+
+        const data = response?.data || {};
+        setRemoteDuplicate({
+          email: Boolean(data.emailExists),
+          username: Boolean(data.usernameExists),
+          aadhaar: Boolean(data.aadhaarExists),
+          pan: Boolean(data.panExists)
+        });
+      } catch (error) {
+        if (!isActive) return;
+        setRemoteDuplicate({ email: false, username: false, aadhaar: false, pan: false });
+      }
+    }, 350);
+
+    return () => {
+      isActive = false;
+      clearTimeout(timer);
+    };
+  }, [formData.email, formData.username, formData.aadhaar, formData.pan]);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -139,6 +295,11 @@ export default function OnboardingView({ onComplete }) {
   const handleSendOtp = async (isResend = false) => {
     if (formData.phone.length !== 10) {
       setOtpStatus('Enter a valid 10-digit phone number in Basic Details first.');
+      return;
+    }
+
+    if (hasAnyDuplicate()) {
+      setOtpStatus('Please fix duplicate Email, Username, Aadhaar, or PAN before sending OTP.');
       return;
     }
 
@@ -407,6 +568,36 @@ export default function OnboardingView({ onComplete }) {
     );
   };
 
+  const applyDuplicateError = (message) => {
+    const normalizedMessage = String(message || '').toLowerCase();
+
+    if (normalizedMessage.includes('email already exists')) {
+      setRemoteDuplicate((prev) => ({ ...prev, email: true }));
+      setStep(1);
+      return true;
+    }
+
+    if (normalizedMessage.includes('aadhaar already exists')) {
+      setRemoteDuplicate((prev) => ({ ...prev, aadhaar: true }));
+      setStep(2);
+      return true;
+    }
+
+    if (normalizedMessage.includes('pan already exists')) {
+      setRemoteDuplicate((prev) => ({ ...prev, pan: true }));
+      setStep(2);
+      return true;
+    }
+
+    if (normalizedMessage.includes('username already exists')) {
+      setRemoteDuplicate((prev) => ({ ...prev, username: true }));
+      setStep(3);
+      return true;
+    }
+
+    return false;
+  };
+
   const handleCompleteOnboarding = async () => {
     setSubmitError('');
     setIsSubmitting(true);
@@ -419,13 +610,20 @@ export default function OnboardingView({ onComplete }) {
         email: formData.email,
         phone: formData.phone,
         company: formData.company === 'Others' ? formData.companyOther : formData.company,
+        aadhaar: formData.aadhaar,
+        pan: formData.pan,
         plan: formData.plan,
         risk: locationRisk,
         city: formData.city,
         upi: formData.upi
       });
     } catch (error) {
-      setSubmitError(error.message || 'Registration failed. Please try again.');
+      const message = error.message || 'Registration failed. Please try again.';
+      const handled = applyDuplicateError(message);
+      setSubmitError(handled ? '' : message);
+      if (handled) {
+        window.scrollTo(0, 0);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -586,7 +784,7 @@ export default function OnboardingView({ onComplete }) {
                 <p className="text-slate-500 text-sm">Let&apos;s start with some basic information about you</p>
               </div>
 
-              <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); if(isStep1Valid()) nextStep(); }}>
+              <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); if (isStep1Valid()) handleStepAdvance(nextStep, { email: formData.email, username: formData.username, aadhaar: formData.aadhaar, pan: formData.pan }); }}>
                 <div className="grid md:grid-cols-2 gap-6">
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700 ml-1">First Name <span className="text-orange-500">*</span></label>
@@ -628,10 +826,19 @@ export default function OnboardingView({ onComplete }) {
                       name="email"
                       value={formData.email}
                       onChange={handleInputChange}
+                      onBlur={handleDuplicateBlur}
                       placeholder="Enter your email address"
-                      className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-6 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
+                      className={cn(
+                        "w-full bg-white border rounded-2xl py-4 pl-12 pr-6 focus:outline-none focus:ring-2 transition-all",
+                        profileDuplicate.email
+                          ? "border-red-400 ring-2 ring-red-200"
+                          : "border-slate-200 focus:ring-orange-500/20 focus:border-orange-500"
+                      )}
                     />
                   </div>
+                  {profileDuplicate.email && (
+                    <p className="text-[10px] text-red-500 font-bold ml-1">Email already exists</p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -711,7 +918,7 @@ export default function OnboardingView({ onComplete }) {
                 </div>
               </div>
 
-              <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); if (isStep2Valid()) nextStep(); else setOtpStatus('Please send and verify the OTP before continuing.'); }}>
+              <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); if (isStep2Valid()) handleStepAdvance(nextStep, { email: formData.email, username: formData.username, aadhaar: formData.aadhaar, pan: formData.pan }); else setOtpStatus('Please send and verify the OTP before continuing.'); }}>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700 ml-1">Aadhaar Number <span className="text-orange-500">*</span></label>
                   <div className="relative">
@@ -721,16 +928,23 @@ export default function OnboardingView({ onComplete }) {
                       name="aadhaar"
                       value={formData.aadhaar}
                       onChange={handleInputChange}
+                      onBlur={handleDuplicateBlur}
                       placeholder="Enter 12-digit Aadhaar number"
                       maxLength={12}
                       className={cn(
                         "w-full bg-white border rounded-2xl py-4 pl-12 pr-6 focus:outline-none focus:ring-2 transition-all",
+                        kycDuplicate.aadhaar
+                          ? "border-red-400 ring-2 ring-red-200"
+                          :
                         formData.aadhaar.length === 12 
                           ? "border-orange-500 ring-2 ring-orange-500/20" 
                           : "border-slate-200 focus:ring-orange-500/20 focus:border-orange-500"
                       )}
                     />
                   </div>
+                  {kycDuplicate.aadhaar && (
+                    <p className="text-[10px] text-red-500 font-bold ml-1">Aadhaar already exists</p>
+                  )}
                   {formData.aadhaar.length === 12 ? (
                     <div className="space-y-2 ml-1 animate-in fade-in slide-in-from-top-1 duration-300">
                       <div className="flex items-center gap-1.5 text-green-600 text-[10px] font-bold">
@@ -745,7 +959,7 @@ export default function OnboardingView({ onComplete }) {
                       <button 
                         type="button"
                         onClick={handleSendOtp}
-                        disabled={isOtpLoading || otpSent}
+                        disabled={isOtpLoading || otpSent || hasAnyDuplicate()}
                         className="bg-blue-600 text-white text-[10px] font-bold px-6 py-2.5 rounded-xl hover:bg-blue-700 transition-all active:scale-95 shadow-lg shadow-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         {isOtpLoading ? 'Sending...' : otpSent ? 'OTP Sent' : 'Send OTP'}
@@ -822,11 +1036,18 @@ export default function OnboardingView({ onComplete }) {
                       name="pan"
                       value={formData.pan}
                       onChange={handleInputChange}
+                      onBlur={handleDuplicateBlur}
                       placeholder="ABCDE1234F"
                       maxLength={10}
-                      className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-6 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all uppercase"
+                      className={cn(
+                        "w-full bg-white border rounded-2xl py-4 pl-12 pr-6 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all uppercase",
+                        kycDuplicate.pan ? "border-red-400 ring-2 ring-red-200" : "border-slate-200"
+                      )}
                     />
                   </div>
+                  {kycDuplicate.pan && (
+                    <p className="text-[10px] text-red-500 font-bold ml-1">PAN already exists</p>
+                  )}
                   <p className="text-[10px] text-slate-400 ml-1">Format: 5 letters, 4 numbers, 1 letter (e.g., ABCDE1234F)</p>
                 </div>
 
@@ -856,7 +1077,7 @@ export default function OnboardingView({ onComplete }) {
                 <p className="text-slate-500 text-sm">Set your username and password for future sign in</p>
               </div>
 
-              <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); if (isStep3Valid()) nextStep(); }}>
+              <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); if (isStep3Valid()) handleStepAdvance(nextStep, { email: formData.email, username: formData.username, aadhaar: formData.aadhaar, pan: formData.pan }); }}>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700 ml-1">Username <span className="text-orange-500">*</span></label>
                   <input
@@ -864,9 +1085,18 @@ export default function OnboardingView({ onComplete }) {
                     name="username"
                     value={formData.username}
                     onChange={handleInputChange}
+                    onBlur={handleDuplicateBlur}
                     placeholder="Choose a username"
-                    className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-6 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
+                    className={cn(
+                      "w-full bg-white border rounded-2xl py-4 px-6 focus:outline-none focus:ring-2 transition-all",
+                      profileDuplicate.username
+                        ? "border-red-400 ring-2 ring-red-200"
+                        : "border-slate-200 focus:ring-orange-500/20 focus:border-orange-500"
+                    )}
                   />
+                  {profileDuplicate.username && (
+                    <p className="text-[10px] text-red-500 font-bold ml-1">Username already exists</p>
+                  )}
                   {formData.username && formData.username.trim().length < 4 && (
                     <p className="text-[10px] text-red-500 font-bold ml-1">Username must be at least 4 characters</p>
                   )}
@@ -1294,12 +1524,14 @@ export default function OnboardingView({ onComplete }) {
                 </button>
                 <button 
                   type="button"
-                  onClick={nextStep}
-                  className="w-full bg-orange-500 text-white py-5 rounded-2xl font-bold text-lg hover:bg-orange-600 transition-all active:scale-95 shadow-xl shadow-orange-200"
+                  onClick={handleCompleteOnboarding}
+                  disabled={isSubmitting}
+                  className="w-full bg-orange-500 text-white py-5 rounded-2xl font-bold text-lg hover:bg-orange-600 transition-all active:scale-95 shadow-xl shadow-orange-200 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Confirm & Cover
+                  {isSubmitting ? 'Creating your account...' : 'Confirm & Create Account'}
                 </button>
               </div>
+              {submitError && <p className="mt-3 text-sm font-semibold text-red-600">{submitError}</p>}
             </div>
           )}
         </motion.div>

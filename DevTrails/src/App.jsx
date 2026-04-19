@@ -18,6 +18,97 @@ import ClaimProcess from './components/legal/ClaimProcess';
 import ErrorBoundary from './components/misc/ErrorBoundary';
 
 export default function App() {
+  const LOCAL_USERS_KEY = 'aegis_local_users';
+
+  const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+  const normalizePhone = (value) => String(value || '').replace(/\D/g, '');
+  const normalizeUsername = (value) => String(value || '').trim().toLowerCase();
+  const normalizeAadhaar = (value) => String(value || '').replace(/\D/g, '');
+  const normalizePan = (value) => String(value || '').trim().toUpperCase();
+
+  const getLocalUsers = () => {
+    try {
+      const raw = localStorage.getItem(LOCAL_USERS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      console.warn('Failed to parse local demo users', error);
+      return [];
+    }
+  };
+
+  const saveLocalUsers = (users) => {
+    localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(users));
+  };
+
+  const upsertLocalUser = (profile) => {
+    const users = getLocalUsers();
+    const profileEmail = normalizeEmail(profile?.email);
+    const profileUsername = normalizeUsername(profile?.username);
+    const profilePhone = normalizePhone(profile?.phone);
+
+    const index = users.findIndex((user) => {
+      const emailMatch = profileEmail && normalizeEmail(user?.email) === profileEmail;
+      const usernameMatch = profileUsername && normalizeUsername(user?.username) === profileUsername;
+      const phoneMatch = profilePhone && normalizePhone(user?.phone) === profilePhone;
+      return emailMatch || usernameMatch || phoneMatch;
+    });
+
+    if (index >= 0) {
+      users[index] = { ...users[index], ...profile };
+    } else {
+      users.push(profile);
+    }
+
+    saveLocalUsers(users);
+  };
+
+  const findLocalDuplicateMessage = (profile) => {
+    const users = getLocalUsers();
+    const aadhaar = normalizeAadhaar(profile?.aadhaar);
+    const pan = normalizePan(profile?.pan);
+
+    if (aadhaar && users.some((u) => normalizeAadhaar(u?.aadhaar) === aadhaar)) {
+      return 'Aadhaar already exists';
+    }
+    if (pan && users.some((u) => normalizePan(u?.pan) === pan)) {
+      return 'PAN already exists';
+    }
+
+    return null;
+  };
+
+  const findLocalUserForLogin = (identifier, password) => {
+    const users = getLocalUsers();
+    const normalizedIdentifier = String(identifier || '').trim();
+    const byEmail = normalizeEmail(normalizedIdentifier);
+    const byUsername = normalizeUsername(normalizedIdentifier);
+    const byPhone = normalizePhone(normalizedIdentifier);
+
+    return users.find((user) => {
+      const identifierMatch =
+        (byEmail && normalizeEmail(user?.email) === byEmail) ||
+        (byUsername && normalizeUsername(user?.username) === byUsername) ||
+        (byPhone && normalizePhone(user?.phone) === byPhone);
+
+      return identifierMatch && String(user?.password || '') === String(password || '');
+    });
+  };
+
+  const hasLocalUserIdentifier = (identifier) => {
+    const users = getLocalUsers();
+    const normalizedIdentifier = String(identifier || '').trim();
+    const byEmail = normalizeEmail(normalizedIdentifier);
+    const byUsername = normalizeUsername(normalizedIdentifier);
+    const byPhone = normalizePhone(normalizedIdentifier);
+
+    return users.some((user) =>
+      (byEmail && normalizeEmail(user?.email) === byEmail) ||
+      (byUsername && normalizeUsername(user?.username) === byUsername) ||
+      (byPhone && normalizePhone(user?.phone) === byPhone)
+    );
+  };
+
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [view, setView] = useState('home'); // 'home', 'onboarding', 'signin', 'about', 'account', 'dashboard', 'privacy', 'terms', 'claim'
@@ -119,9 +210,9 @@ export default function App() {
     if (storedUser) {
       try {
         const parsed = JSON.parse(storedUser);
-        const incomingUsername = profile?.username?.toLowerCase();
+        const incomingUsername = saveProfile?.username?.toLowerCase();
         const storedUsername = parsed?.username?.toLowerCase();
-        const incomingPhone = profile?.phone;
+        const incomingPhone = saveProfile?.phone;
         const storedPhone = parsed?.phone;
 
         if ((incomingUsername && storedUsername && incomingUsername === storedUsername) || (incomingPhone && storedPhone && incomingPhone === storedPhone)) {
@@ -171,6 +262,8 @@ export default function App() {
         password: profile?.password,
         phone: profile?.phone,
         company: profile?.company,
+        aadhaar: profile?.aadhaar,
+        pan: profile?.pan,
         city: profile?.city,
         plan: profile?.plan,
         risk: profile?.risk,
@@ -184,12 +277,30 @@ export default function App() {
 
       const user = response?.data?.user;
       if (user) {
+        upsertLocalUser(user);
         persistSession(user, destination);
       } else {
+        upsertLocalUser(profile);
         persistSession(profile, destination);
       }
     } catch (error) {
-      throw new Error(error.message || 'Registration failed');
+      const message = String(error?.message || 'Registration failed');
+      const isDatabaseTimeout = /buffering timed out|mongo|mongodb|users\.findone|insertone/i.test(message);
+      const isNetworkFailure = /failed to fetch|networkerror|network request failed/i.test(message);
+
+      if (isDatabaseTimeout || isNetworkFailure) {
+        const duplicateMessage = findLocalDuplicateMessage(profile);
+        if (duplicateMessage) {
+          throw new Error(duplicateMessage);
+        }
+
+        upsertLocalUser(profile);
+        // Demo fallback: keep onboarding usable even when backend DB is unavailable.
+        persistSession(profile, destination);
+        return;
+      }
+
+      throw new Error(message || 'Registration failed');
     }
   };
 
@@ -220,7 +331,25 @@ export default function App() {
 
       throw new Error('Login response missing user profile');
     } catch (error) {
-      throw new Error(error.message || 'Login failed');
+      const message = String(error?.message || 'Login failed');
+      const isDatabaseTimeout = /buffering timed out|mongo|mongodb|users\.findone/i.test(message);
+      const isNetworkFailure = /failed to fetch|networkerror|network request failed/i.test(message);
+
+      if (isDatabaseTimeout || isNetworkFailure) {
+        const localUser = findLocalUserForLogin(credentials?.identifier, credentials?.password);
+        if (localUser) {
+          persistSession(localUser, destination);
+          return;
+        }
+
+        if (hasLocalUserIdentifier(credentials?.identifier)) {
+          throw new Error('Invalid credentials');
+        }
+
+        throw new Error('Login service is temporarily unavailable. Please try again shortly.');
+      }
+
+      throw new Error(message || 'Login failed');
     }
   };
 

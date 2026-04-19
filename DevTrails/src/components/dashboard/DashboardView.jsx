@@ -26,7 +26,43 @@ const statusBadges = {
 const TRIGGER_TO_PAYOUT_KEY = {
   highRain: 'rain',
   highAQI: 'aqi',
-  heatSpike: 'heat'
+  heatSpike: 'heat',
+  flood: 'flood'
+};
+
+const SIMULATION_CONFIG = {
+  highRain: {
+    emoji: '🌧️',
+    statusLabel: 'Rain',
+    run: aiSimulateRain,
+    triggerType: 'rain',
+    value: 75,
+    threshold: 50
+  },
+  heatSpike: {
+    emoji: '🔥',
+    statusLabel: 'Heatwave',
+    run: aiSimulateHeatwave,
+    triggerType: 'heat',
+    value: 48,
+    threshold: 42
+  },
+  highAQI: {
+    emoji: '💨',
+    statusLabel: 'AQI',
+    run: aiSimulateAQI,
+    triggerType: 'aqi',
+    value: 470,
+    threshold: 350
+  },
+  flood: {
+    emoji: '🌊',
+    statusLabel: 'Flood',
+    run: aiSimulateFlood,
+    triggerType: 'flood',
+    value: 1,
+    threshold: 1
+  }
 };
 
 const PLAN_PAYOUT_DISPLAY = {
@@ -43,7 +79,7 @@ const PLAN_PAYOUT_DISPLAY = {
 };
 
 export default function DashboardView({ onBack, onLogout, selectedPlan, selectedRisk, userProfile, demoMode, setDemoMode, setUserProfile }) {
-  const risk = selectedRisk || userProfile?.risk || 'Low';
+  const userRisk = selectedRisk || userProfile?.risk || 'Low';
   
   const [logs, setLogs] = useState([]);
   const [claims, setClaims] = useState([]);
@@ -57,11 +93,11 @@ export default function DashboardView({ onBack, onLogout, selectedPlan, selected
   const [demoClaims, setDemoClaims] = useState([]);
   const [selectedSimulation, setSelectedSimulation] = useState(null);
   const [selectedDemoPlan, setSelectedDemoPlan] = useState({ region: null, plan: null });
-  const [claimResult, setClaimResult] = useState(null);
 
   // Use selectedDemoPlan for demo mode, fall back to profile plan for live mode
+  const effectiveRisk = selectedDemoPlan.region || userRisk;
   const planKey = selectedDemoPlan.plan || selectedPlan || userProfile?.plan;
-  const activePlan = planKey ? PLAN_METRICS[risk]?.[planKey] : null;
+  const activePlan = planKey ? PLAN_METRICS[effectiveRisk]?.[planKey] : null;
   const planName = planKey ? planKey.charAt(0).toUpperCase() + planKey.slice(1) : 'No plan selected';
 
   const location = userProfile?.location;
@@ -200,102 +236,68 @@ export default function DashboardView({ onBack, onLogout, selectedPlan, selected
     return () => clearInterval(interval);
   }, []);
 
-  const simulate = async (type) => {
+  const runSimulation = async (simulationType) => {
     if (!activePlan) {
       setStatusMessage('Please select a plan first.');
       return;
     }
-    if (!demoMode) {
-      setStatusMessage('Please enable Demo Mode first.');
+
+    const simulation = SIMULATION_CONFIG[simulationType];
+    if (!simulation) {
+      setStatusMessage('Unknown simulation type.');
       return;
     }
-    
-    setStatusMessage('Simulating event...');
-    setSelectedSimulation(type);
-    try {
-      await simulateEvent(type, lat, lng);
 
-      const payoutKey = TRIGGER_TO_PAYOUT_KEY[type] || 'rain';
+    setSelectedSimulation(simulationType);
+    setStatusMessage(`${simulation.emoji} Evaluating claim...`);
+
+    try {
+      let aiWarning = '';
+      const payoutKey = TRIGGER_TO_PAYOUT_KEY[simulationType];
       const demoPayout = Number(activePlan?.payouts?.[payoutKey] || 0);
 
+      // Keep backend simulation log behavior consistent in demo.
+      // If backend DB is temporarily unavailable, continue demo claim evaluation.
+      try {
+        await simulateEvent(simulationType, lat, lng);
+      } catch (backendError) {
+        console.warn('Simulation backend sync skipped:', backendError?.message);
+      }
+
+      try {
+        const response = await simulation.run();
+        const result = response?.data;
+        if (result?.status !== 'APPROVED') {
+          aiWarning = ' AI marked it ineligible, but demo payout table applied.';
+        }
+      } catch (aiError) {
+        aiWarning = ' AI service unavailable, demo payout table applied.';
+      }
+
+      // Demo behavior: always apply configured payout for selected plan + simulation.
       setDemoWalletBalance((prev) => Number((prev + demoPayout).toFixed(2)));
       setDemoClaims((prev) => [
         {
           _id: `demo-${Date.now()}`,
-          trigger_type: payoutKey,
-          value: type === 'highRain' ? 75 : type === 'highAQI' ? 470 : 48,
-          threshold: type === 'highRain' ? 50 : type === 'highAQI' ? 350 : 42,
+          trigger_type: simulation.triggerType,
+          value: simulation.value,
+          threshold: simulation.threshold,
           payout: demoPayout,
           status: 'PAID',
+          plan: planKey,
+          risk: effectiveRisk,
           createdAt: new Date().toISOString()
         },
         ...prev
       ]);
 
-      await new Promise((resolve) => setTimeout(resolve, 2200));
+      setLastClaimMessage(`Claim updated for ${planName} (${effectiveRisk} risk). ₹${demoPayout} credited.`);
+
       await fetchData();
-      setLastClaimMessage(`Okay, you got claim. ₹${demoPayout} credited for this simulation.`);
-      setStatusMessage(`Simulation ${type} completed. Okay, you got claim.`);
+      setStatusMessage(`${simulation.statusLabel} simulation complete.${aiWarning}`);
     } catch (error) {
-      console.error('Simulation failed', error);
-      setStatusMessage(`Simulation failed: ${error.message}`);
-    }
-  };
-
-  // New simulation functions for AI backend
-  const simulateRain = async () => {
-    setStatusMessage('🌧️ Evaluating claim...');
-    setClaimResult(null);
-    try {
-      const response = await aiSimulateRain();
-      setClaimResult(response.data);
-      setStatusMessage('Claim evaluation complete');
-    } catch (error) {
-      console.error('Rain simulation failed', error);
+      console.error(`${simulationType} simulation failed`, error);
       setStatusMessage(`Error: ${error.message}`);
-      setClaimResult({ error: error.message });
-    }
-  };
-
-  const simulateHeatwave = async () => {
-    setStatusMessage('🔥 Evaluating claim...');
-    setClaimResult(null);
-    try {
-      const response = await aiSimulateHeatwave();
-      setClaimResult(response.data);
-      setStatusMessage('Claim evaluation complete');
-    } catch (error) {
-      console.error('Heatwave simulation failed', error);
-      setStatusMessage(`Error: ${error.message}`);
-      setClaimResult({ error: error.message });
-    }
-  };
-
-  const simulateAQI = async () => {
-    setStatusMessage('💨 Evaluating claim...');
-    setClaimResult(null);
-    try {
-      const response = await aiSimulateAQI();
-      setClaimResult(response.data);
-      setStatusMessage('Claim evaluation complete');
-    } catch (error) {
-      console.error('AQI simulation failed', error);
-      setStatusMessage(`Error: ${error.message}`);
-      setClaimResult({ error: error.message });
-    }
-  };
-
-  const simulateFlood = async () => {
-    setStatusMessage('🌊 Evaluating claim...');
-    setClaimResult(null);
-    try {
-      const response = await aiSimulateFlood();
-      setClaimResult(response.data);
-      setStatusMessage('Claim evaluation complete');
-    } catch (error) {
-      console.error('Flood simulation failed', error);
-      setStatusMessage(`Error: ${error.message}`);
-      setClaimResult({ error: error.message });
     }
   };
 
@@ -311,7 +313,8 @@ export default function DashboardView({ onBack, onLogout, selectedPlan, selected
     const threshold = claim.threshold;
     const payout = claim.payout ?? 0;
 
-    return `${metricName} ${value} exceeded threshold ${threshold} → ₹${payout} payout triggered automatically.`;
+    const planDetails = claim.plan && claim.risk ? ` (${claim.risk} ${claim.plan} plan)` : '';
+    return `${metricName} ${value} exceeded threshold ${threshold} -> ₹${payout} payout triggered automatically${planDetails}.`;
   };
 
   const demoSteps = [
@@ -335,9 +338,13 @@ export default function DashboardView({ onBack, onLogout, selectedPlan, selected
       ? 'High AQI'
       : selectedSimulation === 'heatSpike'
         ? 'Heat Spike'
+        : selectedSimulation === 'flood'
+          ? 'Flood'
         : null;
 
-  const shownClaims = claims.length ? claims : demoClaims;
+  const shownClaims = [...demoClaims, ...claims].sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 pt-32 pb-20 px-6">
@@ -434,77 +441,36 @@ export default function DashboardView({ onBack, onLogout, selectedPlan, selected
               <div>
                 <div className="flex flex-wrap gap-2 mb-4">
                   <button
-                    onClick={simulateRain}
-                    className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
+                    onClick={() => runSimulation('highRain')}
+                    className="rounded-xl px-4 py-2 font-medium transition bg-cyan-600 text-white hover:bg-cyan-500">
                     🌧️ Simulate Rain
                   </button>
                   <button
-                    onClick={simulateHeatwave}
-                    className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
+                    onClick={() => runSimulation('heatSpike')}
+                    className="rounded-xl px-4 py-2 font-medium transition bg-cyan-600 text-white hover:bg-cyan-500">
                     🔥 Simulate Heatwave
                   </button>
                   <button
-                    onClick={simulateAQI}
-                    className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
+                    onClick={() => runSimulation('highAQI')}
+                    className="rounded-xl px-4 py-2 font-medium transition bg-cyan-600 text-white hover:bg-cyan-500">
                     💨 Simulate AQI
                   </button>
                   <button
-                    onClick={simulateFlood}
-                    className="rounded-xl px-4 py-2 font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition">
+                    onClick={() => runSimulation('flood')}
+                    className="rounded-xl px-4 py-2 font-medium transition bg-cyan-600 text-white hover:bg-cyan-500">
                     🌊 Simulate Flood
                   </button>
                 </div>
                 <p className="mt-3 text-sm text-slate-500">{statusMessage || 'Click a simulation button to test the AI claim evaluation.'}</p>
-                {claimResult && !claimResult.error && (
-                  <div className={`mt-4 rounded-xl border p-4 ${claimResult.status === 'APPROVED' ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
-                    <h3 className="text-lg font-bold mb-3">🚀 Claim Evaluation Result</h3>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-slate-600">Status:</span>
-                        <span className={`font-bold ${claimResult.status === 'APPROVED' ? 'text-green-700' : 'text-red-700'}`}>
-                          {claimResult.status === 'APPROVED' ? '✅ APPROVED' : '❌ REJECTED'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-600">Risk Score:</span>
-                        <span className="font-semibold text-slate-900">{claimResult.risk_score?.toFixed(3)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-600">Zone:</span>
-                        <span className="font-semibold text-slate-900">{claimResult.zone}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-600">Fraud Score:</span>
-                        <span className="font-semibold text-slate-900">{claimResult.fraud_score?.toFixed(3)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-600">Trigger Type:</span>
-                        <span className="font-semibold text-slate-900">{getTriggerName(claimResult.trigger_type)}</span>
-                      </div>
-                      {claimResult.status === 'APPROVED' && (
-                        <div className="mt-3 pt-3 border-t border-green-200">
-                          <p className="text-green-700 font-bold">✔️ Payout Eligible</p>
-                          <p className="text-xs text-green-600 mt-1">Your claim has been automatically approved based on parametric triggers.</p>
-                        </div>
-                      )}
-                      {claimResult.status === 'REJECTED' && (
-                        <div className="mt-3 pt-3 border-t border-red-200">
-                          <p className="text-red-700 font-bold">❌ No Payout</p>
-                          <p className="text-xs text-red-600 mt-1">No valid trigger detected for this environmental event.</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                {selectedDemoPlan.plan && (
+                  <p className="mt-2 text-xs text-slate-600">
+                    Selected plan: <strong>{planName}</strong> | Region: <strong>{effectiveRisk}</strong>
+                    {simulationReadableName && activePlan && (
+                      <> | Expected {simulationReadableName} payout: <strong>₹{selectedSimulationPayout}</strong></>
+                    )}
+                  </p>
                 )}
-                {claimResult?.error && (
-                  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <AlertCircle size={20} className="text-red-600" />
-                      <span className="font-bold text-red-800">Error</span>
-                    </div>
-                    <p className="text-sm text-red-700">{claimResult.error}</p>
-                  </div>
-                )}
+                {lastClaimMessage && <p className="mt-2 text-sm text-emerald-700 font-semibold">{lastClaimMessage}</p>}
               </div>
             )}
           </div>
