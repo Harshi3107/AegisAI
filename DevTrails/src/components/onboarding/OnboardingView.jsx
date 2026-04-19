@@ -66,11 +66,11 @@ export default function OnboardingView({ onComplete }) {
   });
 
   const isStep1Valid = () => {
-    const companyValid = formData.company === 'Others' 
-      ? formData.companyOther.trim().length > 0 
+    const companyValid = formData.company === 'Others'
+      ? formData.companyOther.trim().length > 0
       : formData.company.trim().length > 0;
-    
-    return (
+
+    const result = (
       formData.firstName.trim().length > 0 &&
       formData.lastName.trim().length > 0 &&
       /\S+@\S+\.\S+/.test(formData.email) &&
@@ -78,12 +78,42 @@ export default function OnboardingView({ onComplete }) {
       companyValid &&
       !profileDuplicate.email
     );
+
+    // Debug logging for step 1
+    console.log('🔍 Step 1 Validation Debug:', {
+      firstName: formData.firstName.trim().length > 0,
+      lastName: formData.lastName.trim().length > 0,
+      email: /\S+@\S+\.\S+/.test(formData.email),
+      phone: formData.phone.length === 10,
+      companyValid,
+      noEmailDuplicate: !profileDuplicate.email,
+      result
+    });
+
+    return result;
   };
 
   const isStep2Valid = () => {
     const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
     const baseValid = formData.aadhaar.length === 12 && panRegex.test(formData.pan.toUpperCase());
-    return baseValid && otpSent && otpVerified && !kycDuplicate.aadhaar && !kycDuplicate.pan;
+    const result = baseValid && otpSent && otpVerified && !kycDuplicate.aadhaar && !kycDuplicate.pan;
+
+    // Debug logging
+    console.log('🔍 Step 2 Validation Debug:', {
+      aadhaar: formData.aadhaar,
+      aadhaarLength: formData.aadhaar.length,
+      pan: formData.pan,
+      panUpper: formData.pan.toUpperCase(),
+      panRegex: panRegex.test(formData.pan.toUpperCase()),
+      baseValid,
+      otpSent,
+      otpVerified,
+      kycDuplicateAadhaar: kycDuplicate.aadhaar,
+      kycDuplicatePan: kycDuplicate.pan,
+      result
+    });
+
+    return result;
   };
 
   const isStep3Valid = () => {
@@ -116,9 +146,11 @@ export default function OnboardingView({ onComplete }) {
 
   const refreshDuplicateState = async (payload = {}) => {
     const normalizedPayload = normalizeDuplicatePayload(payload);
+    console.log('🔍 Checking duplicates for:', normalizedPayload);
 
     try {
       const response = await checkDuplicateFields(normalizedPayload);
+      console.log('🔍 Duplicate check response:', response);
       const data = response?.data || {};
       setRemoteDuplicate({
         email: Boolean(data.emailExists),
@@ -126,9 +158,42 @@ export default function OnboardingView({ onComplete }) {
         aadhaar: Boolean(data.aadhaarExists),
         pan: Boolean(data.panExists)
       });
+      console.log('🔍 Updated remote duplicates:', {
+        email: Boolean(data.emailExists),
+        username: Boolean(data.usernameExists),
+        aadhaar: Boolean(data.aadhaarExists),
+        pan: Boolean(data.panExists)
+      });
       return data;
     } catch (error) {
-      return { error: true };
+      console.error('🔍 Duplicate check error:', error);
+
+      // Fallback: check local storage only
+      console.log('🔍 Using local duplicate check fallback');
+      const normalizedEmail = normalizedPayload.email?.toLowerCase();
+      const normalizedUsername = normalizedPayload.username?.toLowerCase();
+      const normalizedAadhaar = normalizedPayload.aadhaar;
+      const normalizedPan = normalizedPayload.pan?.toUpperCase();
+
+      let users = [];
+      try {
+        const raw = localStorage.getItem('aegis_local_users');
+        const parsed = raw ? JSON.parse(raw) : [];
+        users = Array.isArray(parsed) ? parsed : [];
+      } catch (error) {
+        users = [];
+      }
+
+      const localDuplicates = {
+        emailExists: normalizedEmail && users.some(u => u.email?.toLowerCase() === normalizedEmail),
+        usernameExists: normalizedUsername && users.some(u => u.username?.toLowerCase() === normalizedUsername),
+        aadhaarExists: normalizedAadhaar && users.some(u => u.aadhaar === normalizedAadhaar),
+        panExists: normalizedPan && users.some(u => u.pan?.toUpperCase() === normalizedPan)
+      };
+
+      setRemoteDuplicate(localDuplicates);
+      console.log('🔍 Local fallback duplicates:', localDuplicates);
+      return localDuplicates;
     }
   };
 
@@ -142,9 +207,34 @@ export default function OnboardingView({ onComplete }) {
   };
 
   const handleStepAdvance = async (nextAction, payload = {}) => {
-    const result = await refreshDuplicateState(payload);
+    console.log('🔄 handleStepAdvance called with step:', step, 'payload:', payload);
+    setSubmitError(''); // Clear any previous errors
+
+    // Only check duplicates for fields that are relevant to the current step
+    const stepRelevantPayload = { ...payload };
+
+    // For step 1, only check email (username might not be set yet)
+    if (step === 1) {
+      stepRelevantPayload.username = '';
+      stepRelevantPayload.aadhaar = '';
+      stepRelevantPayload.pan = '';
+    }
+    // For step 2, check email, aadhaar, and pan
+    else if (step === 2) {
+      stepRelevantPayload.username = '';
+    }
+    // For step 3, check username
+    else if (step === 3) {
+      stepRelevantPayload.aadhaar = '';
+      stepRelevantPayload.pan = '';
+    }
+
+    const result = await refreshDuplicateState(stepRelevantPayload);
+    console.log('🔄 Duplicate check result:', result);
+
     if (!result || result.error) {
-      setOtpStatus('Unable to verify the entered details right now. Please wait and try again.');
+      console.log('❌ Duplicate check failed or errored');
+      setSubmitError('Unable to verify the entered details right now. Please wait and try again.');
       return;
     }
 
@@ -153,13 +243,17 @@ export default function OnboardingView({ onComplete }) {
     const aadhaarExists = Boolean(result?.aadhaarExists);
     const panExists = Boolean(result?.panExists);
 
+    console.log('🔄 Duplicate flags:', { emailExists, usernameExists, aadhaarExists, panExists });
+
     if (emailExists || usernameExists || aadhaarExists || panExists) {
-      if (emailExists) setStep(1);
-      else if (aadhaarExists || panExists) setStep(2);
-      else if (usernameExists) setStep(3);
+      if (emailExists && step >= 1) setStep(1);
+      else if ((aadhaarExists || panExists) && step >= 2) setStep(2);
+      else if (usernameExists && step >= 3) setStep(3);
+      console.log('❌ Duplicate found, staying on current step');
       return;
     }
 
+    console.log('✅ No duplicates found, proceeding to next step');
     nextAction();
   };
 
@@ -308,6 +402,7 @@ export default function OnboardingView({ onComplete }) {
     
     try {
       const response = await sendOtp(formData.phone);
+      console.log('📤 Send OTP Response:', response);
       if (response?.success) {
         setOtpSent(true);
         setOtpValue('');
@@ -365,6 +460,7 @@ export default function OnboardingView({ onComplete }) {
 
     try {
       const response = await verifyOtp(formData.phone, otpValue);
+      console.log('✅ Verify OTP Response:', response);
       if (response?.success) {
         setOtpVerified(true);
         setOtpTimer(0);
@@ -534,6 +630,22 @@ export default function OnboardingView({ onComplete }) {
       handleSendOtp(true);
     }
   }, [otpSent, otpVerified, otpTimer]);
+
+  // Debug useEffect to monitor state changes
+  useEffect(() => {
+    console.log('🔄 State Update - Step 1:', {
+      step,
+      formData: {
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        email: formData.email,
+        phone: formData.phone,
+        company: formData.company,
+        companyOther: formData.companyOther
+      },
+      isStep1Valid: isStep1Valid()
+    });
+  }, [step, formData.firstName, formData.lastName, formData.email, formData.phone, formData.company, formData.companyOther]);
 
   const renderStepper = () => {
     const steps = ['Profile', 'eKYC', 'Account', 'Location', 'Plan', 'Payment', 'Review'];
@@ -784,7 +896,17 @@ export default function OnboardingView({ onComplete }) {
                 <p className="text-slate-500 text-sm">Let&apos;s start with some basic information about you</p>
               </div>
 
-              <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); if (isStep1Valid()) handleStepAdvance(nextStep, { email: formData.email, username: formData.username, aadhaar: formData.aadhaar, pan: formData.pan }); }}>
+              <form className="space-y-6" onSubmit={(e) => {
+                e.preventDefault();
+                console.log('🚀 Step 1 Form Submit Attempt');
+                if (isStep1Valid()) {
+                  console.log('✅ Step 1 validation passed, proceeding...');
+                  handleStepAdvance(nextStep, { email: formData.email, username: formData.username, aadhaar: formData.aadhaar, pan: formData.pan });
+                } else {
+                  console.log('❌ Step 1 validation failed');
+                  // Could add an error message here
+                }
+              }}>
                 <div className="grid md:grid-cols-2 gap-6">
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700 ml-1">First Name <span className="text-orange-500">*</span></label>
@@ -799,7 +921,7 @@ export default function OnboardingView({ onComplete }) {
                         className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-6 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
                       />
                     </div>
-                    {!formData.firstName && <p className="text-[10px] text-red-500 font-bold ml-1">This field is required</p>}
+                    {formData.firstName.trim().length === 0 && <p className="text-[10px] text-red-500 font-bold ml-1">First name is required</p>}
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700 ml-1">Last Name <span className="text-orange-500">*</span></label>
@@ -814,6 +936,7 @@ export default function OnboardingView({ onComplete }) {
                         className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-6 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
                       />
                     </div>
+                    {formData.lastName.trim().length === 0 && <p className="text-[10px] text-red-500 font-bold ml-1">Last name is required</p>}
                   </div>
                 </div>
 
@@ -839,6 +962,8 @@ export default function OnboardingView({ onComplete }) {
                   {profileDuplicate.email && (
                     <p className="text-[10px] text-red-500 font-bold ml-1">Email already exists</p>
                   )}
+                  {formData.email && !/\S+@\S+\.\S+/.test(formData.email) && <p className="text-[10px] text-red-500 font-bold ml-1">Please enter a valid email address</p>}
+                  {formData.email.trim().length === 0 && <p className="text-[10px] text-red-500 font-bold ml-1">Email is required</p>}
                 </div>
 
                 <div className="space-y-2">
@@ -855,6 +980,8 @@ export default function OnboardingView({ onComplete }) {
                       className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-6 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
                     />
                   </div>
+                  {formData.phone && formData.phone.length !== 10 && <p className="text-[10px] text-red-500 font-bold ml-1">Phone number must be exactly 10 digits</p>}
+                  {formData.phone.length === 0 && <p className="text-[10px] text-red-500 font-bold ml-1">Phone number is required</p>}
                 </div>
 
                 <div className="space-y-2">
@@ -876,6 +1003,8 @@ export default function OnboardingView({ onComplete }) {
                       <option value="Others">Others</option>
                     </select>
                   </div>
+                  {formData.company.trim().length === 0 && <p className="text-[10px] text-red-500 font-bold ml-1">Please select your company</p>}
+                  {formData.company === 'Others' && formData.companyOther.trim().length === 0 && <p className="text-[10px] text-red-500 font-bold ml-1">Please enter your company name</p>}
                   {formData.company === 'Others' && (
                     <div className="relative animate-in fade-in slide-in-from-top-2 duration-300">
                       <CreditCard className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
@@ -897,6 +1026,40 @@ export default function OnboardingView({ onComplete }) {
                 >
                   Continue to eKYC <ArrowRight size={20} />
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    console.log('🔧 Step 1 Debug Info:', {
+                      step,
+                      formData: {
+                        firstName: formData.firstName,
+                        lastName: formData.lastName,
+                        email: formData.email,
+                        phone: formData.phone,
+                        company: formData.company,
+                        companyOther: formData.companyOther
+                      },
+                      validation: {
+                        firstNameValid: formData.firstName.trim().length > 0,
+                        lastNameValid: formData.lastName.trim().length > 0,
+                        emailValid: /\S+@\S+\.\S+/.test(formData.email),
+                        phoneValid: formData.phone.length === 10,
+                        companyValid: formData.company === 'Others'
+                          ? formData.companyOther.trim().length > 0
+                          : formData.company.trim().length > 0,
+                        noEmailDuplicate: !profileDuplicate.email,
+                        isStep1Valid: isStep1Valid()
+                      },
+                      duplicates: profileDuplicate
+                    });
+                    alert('Check browser console for Step 1 debug info');
+                  }}
+                  className="w-full bg-blue-600 text-white py-3 rounded-2xl font-bold text-sm hover:bg-blue-700 transition-all active:scale-95 shadow-lg shadow-blue-200"
+                >
+                  Debug Step 1
+                </button>
+                {submitError && <p className="mt-3 text-sm font-semibold text-red-600">{submitError}</p>}
               </form>
             </div>
           )}
@@ -918,7 +1081,17 @@ export default function OnboardingView({ onComplete }) {
                 </div>
               </div>
 
-              <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); if (isStep2Valid()) handleStepAdvance(nextStep, { email: formData.email, username: formData.username, aadhaar: formData.aadhaar, pan: formData.pan }); else setOtpStatus('Please send and verify the OTP before continuing.'); }}>
+              <form className="space-y-8" onSubmit={(e) => {
+                e.preventDefault();
+                console.log('🚀 Step 2 Form Submit Attempt');
+                if (isStep2Valid()) {
+                  console.log('✅ Step 2 validation passed, proceeding...');
+                  handleStepAdvance(nextStep, { email: formData.email, username: formData.username, aadhaar: formData.aadhaar, pan: formData.pan });
+                } else {
+                  console.log('❌ Step 2 validation failed');
+                  setOtpStatus('Please send and verify the OTP before continuing.');
+                }
+              }}>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700 ml-1">Aadhaar Number <span className="text-orange-500">*</span></label>
                   <div className="relative">
@@ -1059,12 +1232,31 @@ export default function OnboardingView({ onComplete }) {
                   Verify & Continue
                 </button>
 
-                <button 
+                <button
                   type="button"
-                  onClick={prevStep}
-                  className="w-full text-slate-400 font-bold text-sm hover:text-slate-600 transition-colors"
+                  onClick={() => {
+                    console.log('🔧 Debug Info:', {
+                      step,
+                      otpSent,
+                      otpVerified,
+                      kycDuplicate,
+                      formData: {
+                        aadhaar: formData.aadhaar,
+                        pan: formData.pan,
+                        phone: formData.phone
+                      },
+                      validation: {
+                        aadhaarLength: formData.aadhaar.length === 12,
+                        panRegex: /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(formData.pan.toUpperCase()),
+                        baseValid: formData.aadhaar.length === 12 && /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(formData.pan.toUpperCase()),
+                        isStep2Valid: isStep2Valid()
+                      }
+                    });
+                    alert('Check browser console for debug info');
+                  }}
+                  className="w-full bg-blue-600 text-white py-3 rounded-2xl font-bold text-sm hover:bg-blue-700 transition-all active:scale-95 shadow-lg shadow-blue-200"
                 >
-                  Back
+                  Debug Info
                 </button>
               </form>
             </div>
