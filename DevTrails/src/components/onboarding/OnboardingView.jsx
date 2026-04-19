@@ -1027,38 +1027,6 @@ export default function OnboardingView({ onComplete }) {
                   Continue to eKYC <ArrowRight size={20} />
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    console.log('🔧 Step 1 Debug Info:', {
-                      step,
-                      formData: {
-                        firstName: formData.firstName,
-                        lastName: formData.lastName,
-                        email: formData.email,
-                        phone: formData.phone,
-                        company: formData.company,
-                        companyOther: formData.companyOther
-                      },
-                      validation: {
-                        firstNameValid: formData.firstName.trim().length > 0,
-                        lastNameValid: formData.lastName.trim().length > 0,
-                        emailValid: /\S+@\S+\.\S+/.test(formData.email),
-                        phoneValid: formData.phone.length === 10,
-                        companyValid: formData.company === 'Others'
-                          ? formData.companyOther.trim().length > 0
-                          : formData.company.trim().length > 0,
-                        noEmailDuplicate: !profileDuplicate.email,
-                        isStep1Valid: isStep1Valid()
-                      },
-                      duplicates: profileDuplicate
-                    });
-                    alert('Check browser console for Step 1 debug info');
-                  }}
-                  className="w-full bg-blue-600 text-white py-3 rounded-2xl font-bold text-sm hover:bg-blue-700 transition-all active:scale-95 shadow-lg shadow-blue-200"
-                >
-                  Debug Step 1
-                </button>
                 {submitError && <p className="mt-3 text-sm font-semibold text-red-600">{submitError}</p>}
               </form>
             </div>
@@ -1232,32 +1200,6 @@ export default function OnboardingView({ onComplete }) {
                   Verify & Continue
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    console.log('🔧 Debug Info:', {
-                      step,
-                      otpSent,
-                      otpVerified,
-                      kycDuplicate,
-                      formData: {
-                        aadhaar: formData.aadhaar,
-                        pan: formData.pan,
-                        phone: formData.phone
-                      },
-                      validation: {
-                        aadhaarLength: formData.aadhaar.length === 12,
-                        panRegex: /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(formData.pan.toUpperCase()),
-                        baseValid: formData.aadhaar.length === 12 && /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(formData.pan.toUpperCase()),
-                        isStep2Valid: isStep2Valid()
-                      }
-                    });
-                    alert('Check browser console for debug info');
-                  }}
-                  className="w-full bg-blue-600 text-white py-3 rounded-2xl font-bold text-sm hover:bg-blue-700 transition-all active:scale-95 shadow-lg shadow-blue-200"
-                >
-                  Debug Info
-                </button>
               </form>
             </div>
           )}
